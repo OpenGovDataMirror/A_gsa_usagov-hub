@@ -1,0 +1,39 @@
+#treeWrap{
+    position: relative;
+    display: flex;
+    clear: left;
+}
+
+#tree{
+    -position: absolute;
+    -left: 0;
+    width: 450px;
+    overflow: scroll;
+    z-index: 1;
+    background-color: #fff;
+
+}
+
+#data{
+    flex: 1;
+    z-index:1;
+    -display: block;
+    -margin-left: 450px;
+    -display: none;
+    -position:relative;
+}
+#data .content{
+    padding:0px 40px;
+}
+
+#loadImage {
+    z-index:0;
+    height: 100px;
+    width: 100px;
+    position:absolute;
+    top:20%;
+    left:50%;
+    /* JKH this is not available, or necessary
+    background: #fff url("/sites/all/themes/adminimal_theme/images/loading.gif") no-repeat 50%;
+    */
+}

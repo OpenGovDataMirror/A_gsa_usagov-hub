@@ -1,0 +1,1134 @@
+<?php
+
+/*
+* Purpose of this module is to create site structure report into csv file
+*
+*/
+// JKH added ...
+$itemCount = 0;
+
+function site_structure_report_menu() {
+    $items = array();
+    $items['site-structure-taxonomy-csv'] = array(
+        'title' => 'Generate Site Structure Taxonomy Report',
+        'page callback' => '_prepare_report',
+        'type' => MENU_NORMAL_ITEM,
+        'access callback' => 'check_access_to_site_structure'
+    );
+
+    $items['asset-topic-taxonomy-csv'] = array(
+        'title' => 'Generate Asset Topic Taxonomy Report',
+        'page callback' => '_prepare_att_report',
+        'type' => MENU_NORMAL_ITEM,
+        'access callback' => 'check_access_to_site_structure'
+    );
+
+    $items['super_asset_report_csv'] = array(
+        'title' => 'Generate Super Asset Report',
+        'page callback' => '_prepare_super_att_report',
+        'type' => MENU_NORMAL_ITEM,
+        'access callback' => 'check_access_to_site_structure'
+    );
+    $items['fbo-userinput-csv'] = array(
+        'title' => 'Generate FBO User input Date',
+        'page callback' => '_prepare_fbo_report',
+        'type' => MENU_NORMAL_ITEM,
+        'access callback' => 'check_access_to_site_structure'
+    );
+
+    $items['content-reports'] = array(
+        'title' => 'Download Reports',
+        'page callback' => '_report_landing_page_display',
+        'type' => MENU_NORMAL_ITEM,
+        'access callback' => 'check_access_to_site_structure'
+    );
+
+    $items['fbo-user-input-reports'] = array(
+        'title' => 'Download FBO Facet User Input Data',
+        'page callback' => '_fbo_report_landing_page_display',
+        'type' => MENU_NORMAL_ITEM,
+        'access callback' => 'check_access_to_site_structure'
+    );
+
+    $items['sst-onetime-csv'] = array(
+        'title' => 'Generate Site Structure Taxonomy Onetime Report',
+        'page callback' => '_gen_report',
+        'type' => MENU_NORMAL_ITEM,
+        'access callback' => 'check_access_to_site_structure'
+    );
+    /*
+    $items['roleuserperm'] = array(
+        'page callback' => '__report',
+        'type' => MENU_NORMAL_ITEM,
+        'access callback' => 'check_access_to_site_structure'
+    );*/
+
+    return $items;
+}
+
+$site_structure_array=array();
+
+function check_access_to_site_structure()
+{
+    return user_access('edit terms in 42');
+}
+
+function __report(){
+    $inp = '1-800-2FANNIE (1-800-232-6643)';
+    $orig = $inp;
+    $from = 'abcdefghijklmnopqrstuvwxyz';
+    $to = '222333444555666777788899990';
+
+    $ret =array();
+
+    preg_match_all("/(1?-\d{3}-\d{3}-\d{4})|(1?-\d{3}-[a-zA-Z0-9]{7})/x", $orig, $brs);
+    //dsm($brs);
+
+    if (isset($brs[0])) {
+        foreach ($brs[0] as $ph) {
+            $nph=$ph;
+            // convert the input to lower case
+            $nph = strtolower($nph);
+            $nph = preg_replace('@\([^\)]*\)$@','',$nph);
+            $nph = strtr($nph, $from, $to);
+            $ret [] = '<a href="tel:' . str_replace('-', '',$nph). '">' . $ph . '</a>';
+        }
+    }
+    return implode(' <br> ', $ret);
+}
+
+function _report_landing_page_display() {
+
+    $output = "";
+    //dsm(_compileSuperAssetReportToCSV());
+    $thisFile = basename(__FILE__);
+    $prependMarkup = '<li><a  rendersource="'.$thisFile.'" href="javascript: _getReport(\''.uniqid().'\'); void(0);">List of Content Assets Report</a></li>';
+    $prependMarkup .= '<li><a  rendersource="'.$thisFile.'" href="javascript: _getSuperReport(\''.uniqid().'\'); void(0);">List of Super Assets Report</a></li>';
+    $output = '<ul>'.$prependMarkup.'</ul>'.$output;
+    drupal_add_js('sites/all/modules/custom/site_structure_report/Reports-ExportToCSV-Asset.js');
+    return $output;
+}
+function _fbo_report_landing_page_display() {
+
+    $output = "";
+    //_userinput_report();
+    $thisFile = basename(__FILE__);
+    $prependMarkup = '<li><a  rendersource="'.$thisFile.'" href="javascript: _getFBOReport(\''.uniqid().'\'); void(0);">List of FBO User Input Data Report</a></li>';
+    $output = '<ul>'.$prependMarkup.'</ul>'.$output ;
+    drupal_add_js('sites/all/modules/custom/site_structure_report/Reports-ExportToCSV-Asset.js');
+    return $output;
+}
+
+function _prepare_super_att_report() {
+
+    $reportsTATR = variable_get('reports_super_ar', array());
+
+    // Clear anything Drupal has tried printing/rendering so far
+    @ob_end_clean();
+    while( @ob_end_clean() );
+
+    // Argument validation
+    if ( empty($_REQUEST['reqid']) ) {
+        exit('Missing reqid argument');
+    }
+    $reqid = $_REQUEST['reqid'];
+
+    // Check to see if another thread is working on this report already
+    if ( isset($reportsTATR[$reqid]) && $reportsTATR[$reqid] === 'working' ) {
+        exit('working');
+    }
+
+    // Check to see if another thread has already completed this report [of report-id reqid]
+    if ( isset($reportsTATR[$reqid]) && $reportsTATR[$reqid] === 'complete' ) {
+
+        // So this report must be completed now - but~ is the report saved on THIS server?
+        if ( !file_exists("sites/default/files/report_super_ar_{$reqid}.csv") ) {
+
+            /* Nope, so tell the client its still in the works, it's next request will
+            probably hit a different server (the one where the report is saved) */
+            exit('working');
+
+        } else {
+
+            /* it is, so read this out to the client - JavaScript will take it from there (it
+            will simulate the download) */
+            readfile("sites/default/files/report_super_ar_{$reqid}.csv");
+            exit();
+        }
+    }
+
+    /*  ==================================================
+        FROM THIS POINT ON WE ASSUME WE ARE THE FIRST CALL FOR THIS $reqid, FROM
+        HERE WE WILL BUILD THE ACTUAL REPORT.
+        ==================================================
+    */
+
+    /* Place a flag in the database, visible to all servers and PHP-threads that
+    this reqid is in the works */
+    $reportsTATR[$reqid] = 'working';
+    variable_set('reports_super_ar', $reportsTATR);
+
+    // foreach ( $topTerms as $topTerm ) {
+    $rows= _compileSuperAssetReportToCSV();
+
+    // Open the file for writing
+    $h = fopen("sites/default/files/report_super_ar_{$reqid}.csv", 'w');
+    if ( $h === false ) {
+        exit('error');
+    }
+    // Write the CSV headers
+    fwrite($h, '"counter","Title","Parent Title", "Hierarchy Level", "Type", "CMP Edit Link", "Assets-Nodes Associated (cumulative)", "For Use By", "Owner", "Asset Node Id", "Status", "Date Last Reviewed","Language", "Type of Asset",  "Assigned to taxonomy", "Created Date", "Most Recent Published Date", "Soft Deleted Date", "# of Asset Topic Taxonomy Appearances","# of pages found","Page URL appears on", "Page URL with Anchor Link", "Site Structure Taxonomy Node ID#", "ATT Title Level 8", "ATT Title Level 7", "ATT Title Level 6", "ATT Title Level 5", "ATT Title Level 4","ATT Title Level 3", "ATT Title Level 2", "ATT Title Level 1", "ATT ID# Level 8", "ATT ID# Level 7", "ATT ID# Level 6", "ATT ID# Level 5", "ATT ID# Level 4", "ATT ID# Level 3", "ATT ID# Level 2", "ATT ID# Level 1"');
+    fwrite($h, "\n");
+
+    // Write the CSV content
+    $newrows = array();
+    $counter =0 ;
+    foreach($rows as $row){
+        $counter++;
+        $row['counter'] =$counter;
+        $newrows[] =$row;
+    }
+
+    foreach ( $newrows as $row ) {
+        foreach ( array_values($row) as $cellId => $cellValue) {
+            if ( $cellId != 0 ) {
+                fwrite($h, ",");
+            }
+            fwrite($h, "\"".$cellValue."\"");
+        }
+        fwrite($h, "\n");
+    }
+    fclose($h);
+
+    /* Place a flag in the database, visible to all servers and PHP-threads that
+    this reqid is created and complete */
+    $reportsTATR[$reqid] = 'complete';
+    variable_set('reports_super_ar', $reportsTATR);
+
+    exit('working');
+}
+
+function _compileSuperAssetReportToCSV(){
+    $counter = 1;
+	// JKH this function needs to be rewritten...
+	if($counter == 1) {
+		exit('complete');		
+	}    
+    $nodecount = db_query("SELECT COUNT(*) FROM node WHERE type IN ('file_content_type', 'html_content_type', 'multimedia_content_type', 'text_content_type')")->fetchField(0);
+    // Get the nodes associated with this
+    $nodes = db_query("SELECT nid FROM node WHERE type IN ('file_content_type', 'html_content_type', 'multimedia_content_type', 'text_content_type') LIMIT ".$nodecount);
+
+    $lookup_tt=array();
+    foreach ($nodes as $n ) {
+        $node = node_load($n->nid);
+        // Get the 'For Use By' text for this node
+        $forUseBy = array();
+        if ($node->type == 'text_content_type') {
+            foreach ($node->field_for_use_by_text['und'] as $valCont) {
+                $forUseBy[] = _get_uby_lbl_name($valCont['value']);
+            }
+        }
+        if ($node->type == 'multimedia_content_type' || $node->type == 'html_content_type' || $node->type == 'file_content_type') {
+            foreach ($node->field_for_use_by['und'] as $valCont) {
+                $forUseBy[$valCont['value']] = _get_uby_lbl_name($valCont['value']);
+            }
+        }
+        $forUseBy = implode(', ', $forUseBy);
+        if ($forUseBy == 'Kids.USA.gov'){
+            continue;
+        }
+
+        $last_reviewed = get_node_lastReviewedDate(array($node->nid));
+        $first_published = db_query("SELECT MIN(stamp) FROM workbench_moderation_node_history WHERE nid = ".$node->nid . " AND from_state='scheduled_for_publication' AND state = 'published'")->fetchField(0);
+        $last_published = db_query("SELECT MAX(stamp) FROM workbench_moderation_node_history WHERE nid = ".$node->nid . " AND state = 'published'")->fetchField(0);
+        $node_deleted = db_query("SELECT deletion_timestamp FROM node_deleted WHERE deletion_state = 'soft' AND nid = ".$node->nid )->fetchField(0);
+
+        // Prepare to add new row to the report - for this node under this Asset Topic
+        $sstids = count_findSiteStructTermsThatReferenceAsset($node->nid);
+        $pageurlst = array();
+        $pageurlanchort = array();
+
+        foreach($sstids as $stid){
+            $pageurl = db_query("SELECT field_friendly_url_value FROM field_data_field_friendly_url WHERE entity_id =".$stid)->fetchField(0);
+            $pageurlst[] = $pageurl;
+            $pageurlanchort[] = $pageurl.'#item-'.$node->nid;
+
+            if (array_key_exists($stid, $lookup_tt)){
+                $get_ssall_parents = $lookup_tt[$stid];
+            }
+            else {
+                $get_ssall_parents=taxonomy_get_parents_all($stid);
+                $lookup_tt[$stid] = $get_ssall_parents;
+            }
+        }
+
+        $counter++;
+        $nodeStatus = _node_actual_status($node->nid, $node->status);
+        $jk = 0;
+        // JKH this function needs to be re-written...
+        $skip = false;
+        if (count($node->field_asset_topic_taxonomy['und']) > 0) {
+            foreach ($node->field_asset_topic_taxonomy['und'] as $asstt) {
+
+                if (array_key_exists($asstt, $lookup_tt)) {
+                    $get_all_parents = $lookup_tt[$asstt['tid']];
+                }
+                else{
+                    $get_all_parents=taxonomy_get_parents_all($asstt['tid']);
+                    $lookup_tt[$asstt['tid']] = $get_all_parents;
+                }
+
+                $sst_lvl = count($get_ssall_parents);
+                $at_lvl = count($get_all_parents);
+                for($ii = 1; $ii < 9; $ii++){
+
+                    if (isset($get_all_parents[$at_lvl - $ii])) {
+                        ${'at' . $ii . '_tid'.$asstt['tid']} = $get_all_parents[$at_lvl - $ii]->tid;
+                        ${'at' . $ii . '_title'.$asstt['tid']} = tssr_sanitzie($get_all_parents[$at_lvl - $ii]->name);
+                    }
+                    else{
+                        ${'at' . $ii . '_tid'.$asstt['tid']} = ${'lasttid'.$asstt['tid']};
+                        ${'at' . $ii . '_title'.$asstt['tid']} = tssr_sanitzie(${'lastterm'.$asstt['tid']});
+                    }
+
+                    if (isset($get_all_parents[$at_lvl - $ii])){
+                        ${'lasttid'.$asstt['tid']}=$get_all_parents[$at_lvl-$ii]->tid;
+                        ${'lastterm'.$asstt['tid']}=$get_all_parents[$at_lvl-$ii]->name;
+                    }
+                }
+                // Skip kids
+                if ($get_all_parents[$at_lvl-1]->tid == 3897 || $get_ssall_parents[$sst_lvl-1] == 3072){
+                    $skip=true;
+                    continue;
+
+                }
+
+                $usagovURL="//www.usa.gov";
+                $gobgovURL=$usagovURL;
+
+                // whether to it is dev or local
+                if (strpos($_SERVER["HTTP_HOST"],'usa.dev') !== false){
+                    //$gobgovURL="//gobierno.usa.dev";
+                    $gobgovURL="//www.usa.dev";
+                }
+
+                if (strpos($_SERVER["HTTP_HOST"],'test-') !== false){
+                    //$gobgovURL="//test-gobiernogov.ctacdev.com";
+                    $gobgovURL="//test-usagov.ctacdev.com";
+                }
+
+                if (strpos($_SERVER["HTTP_HOST"],'stage-') !== false){
+                    //$gobgovURL="//stage-gobiernogov.ctacdev.com";
+                    $gobgovURL="//stage-usagov.ctacdev.com";
+                }
+                // USA
+                if ($get_all_parents[$at_lvl-1]->tid == 11726 || $get_ssall_parents[$sst_lvl-1] == 3062){
+                    $url = $usagovURL;
+                }
+                // GOBIERNO
+                if ($get_all_parents[$at_lvl-1]->tid == 125 || $get_ssall_parents[$sst_lvl-1] == 3067){
+                    $url = $gobgovURL;
+                }
+
+                $url = "https:".$url;
+                $pageurls=array();
+                foreach($pageurlst as $pu){
+                    $pageurls[] = $url.$pu;
+                }
+                $pageurlanchor=array();
+                foreach($pageurlanchort as $pua){
+                    $pageurlanchor[] = $url.$pua;
+                }
+
+                $newRow = array(
+                    'counter' => $counter,
+                    'Title' => tssr_sanitzie($node->title),
+                    'Parent Title' => $at8_title,
+                    'Hierarchy Level' => '',
+                    'Type' => 'Asset (node)',
+                    'CMP Edit Link' => "https://" . $_SERVER['HTTP_HOST'] . "/node/{$node->nid}/edit",
+                    'Assets-Nodes Associated (cumulative' => 'N/A',
+                    'For Use By' => tssr_sanitzie($forUseBy),
+                    'Owner' => !empty($node->field_owner['und'][0]['target_id']) ? tssr_sanitzie((tssr_get_username($node->field_owner['und'][0]['target_id']))) : 'NOT SET IN CMP',
+                    'Asset Node Id' => $node->nid,
+                    'Status' => $nodeStatus,
+                    'Date Last Reviewed' => (isset($last_reviewed)) ? tssr_sanitzie(date("F d, Y", $last_reviewed)) : 'NOT SET IN CMP',
+                    'Language' => isset($node->field_language['und'][0]['value']) ? tssr_sanitzie($node->field_language['und'][0]['value']) : 'NOT SET IN CMP',
+                    'Type of Asset' => tssr_sanitzie(node_type_get_name($node)),
+                    'Assigned to taxonomy' => (isset($node->field_asset_topic_taxonomy['und'][0]['tid']) && is_numeric($node->field_asset_topic_taxonomy['und'][0]['tid'])) ? "Yes" : "No",
+                    'Created Date' => date("F d, Y", $node->created),
+                    //'Published Date from Ready from publication' => (isset($first_published)) ? date("F d, Y", $first_published) : 'NOT SET IN CMP',
+                    'Most Recent Published Date' => (isset($last_published)) ? date("F d, Y", $last_published) : 'NOT SET IN CMP',
+                    'Soft Deleted Date' => (isset($node_deleted) && !empty($node_deleted)) ? date("F d, Y", $node_deleted) : 'NOT SET IN CMP',
+                    '# of Asset Topic Taxonomy Appearances' => count($node->field_asset_topic_taxonomy['und']),
+                    '# of pages found' => ($nodeStatus == 'Soft Deleted') ? 0 : count($sstids),
+                    'Page URL appears on' => ($nodeStatus == 'Soft Deleted') ? '' : $pageurls[$jk],
+                    'Page URL with Anchor Link' => ($nodeStatus == 'Soft Deleted') ? '' : $pageurlanchor[$jk],
+                    'Site Structure Taxonomy Node ID#' => ($nodeStatus == 'Soft Deleted') ? '' : $ssstid,
+                    'ATT Title Level 8' => ${'at8_title'.$asstt['tid']},
+                    'ATT Title Level 7' => ${'at7_title'.$asstt['tid']},
+                    'ATT Title Level 6' => ${'at6_title'.$asstt['tid']},
+                    'ATT Title Level 5' => ${'at5_title'.$asstt['tid']},
+                    'ATT Title Level 4' => ${'at4_title'.$asstt['tid']},
+                    'ATT Title Level 3' => ${'at3_title'.$asstt['tid']},
+                    'ATT Title Level 2' => ${'at2_title'.$asstt['tid']},
+                    'ATT Title Level 1' => ${'at1_title'.$asstt['tid']},
+                    'ATT ID# Level 8' => ${'at8_tid'.$asstt['tid']},
+                    'ATT ID# Level 7' => ${'at7_tid'.$asstt['tid']},
+                    'ATT ID# Level 6' => ${'at6_tid'.$asstt['tid']},
+                    'ATT ID# Level 5' => ${'at5_tid'.$asstt['tid']},
+                    'ATT ID# Level 4' => ${'at4_tid'.$asstt['tid']},
+                    'ATT ID# Level 3' => ${'at3_tid'.$asstt['tid']},
+                    'ATT ID# Level 2' => ${'at2_tid'.$asstt['tid']},
+                    'ATT ID# Level 1' => ${'at1_tid'.$asstt['tid']}
+                );
+                // Add new row to the report - for this node under this Asset Topic
+                $rows['nid' . $node->nid . '-' . $asstt['tid']] = $newRow;
+                $jk++;
+            }
+        }
+        if ($skip) continue;
+        //add taxonomy
+        if (count($node->field_asset_topic_taxonomy['und']) > 0) {
+            foreach ($node->field_asset_topic_taxonomy['und'] as $asstt) {
+                if (!array_key_exists('tid' . $asstt['tid'], $rows)) {
+                    $counter++;
+                    $att_term_name = db_query("SELECT name FROM taxonomy_term_data WHERE tid=".$asstt['tid'])->fetchField(0);
+
+                    $newRow = array(
+                        'counter' => $counter,
+                        'Title' => tssr_sanitzie($att_term_name),
+                        'Parent Title' => $get_all_parents[1]->name,
+                        'Hierarchy Level' => $at_lvl,
+                        'Type' => 'Asset Topic (taxonomy-term)',
+                        'CMP Edit Link' => "https://" . $_SERVER['HTTP_HOST'] . "/taxonom/term/{$asstt['tid']}/edit",
+                        'Assets-Nodes Associated (cumulative' => 'N/A',
+                        'For Use By' => 'N/A',
+                        'Owner' => 'N/A',
+                        'Asset Node Id' => 'N/A',
+                        'Status' => 'N/A',
+                        'Date Last Reviewed' => 'N/A',
+                        'Language' => 'N/A',
+                        'Type of Asset' => 'N/A',
+                        'Assigned to taxonomy' => 'N/A',
+                        'Created Date' => 'N/A',
+                        //'Published Date from Ready from publication' => 'N/A',
+                        'Most Recent Published Date' => 'N/A',
+                        'Soft Deleted Date' => 'N/A',
+                        '# of Asset Topic Taxonomy Appearances' => '',
+                        '# of pages found' => 'N/A',
+                        'Page URL appears on' => 'N/A',
+                        'Page URL with Anchor Link' => 'N/A',
+                        'Site Structure Taxonomy Node ID#' => 'N/A',
+                        'ATT Title Level 8' => ${'at8_title'.$asstt['tid']},
+                        'ATT Title Level 7' => ${'at7_title'.$asstt['tid']},
+                        'ATT Title Level 6' => ${'at6_title'.$asstt['tid']},
+                        'ATT Title Level 5' => ${'at5_title'.$asstt['tid']},
+                        'ATT Title Level 4' => ${'at4_title'.$asstt['tid']},
+                        'ATT Title Level 3' => ${'at3_title'.$asstt['tid']},
+                        'ATT Title Level 2' => ${'at2_title'.$asstt['tid']},
+                        'ATT Title Level 1' => ${'at1_title'.$asstt['tid']},
+                        'ATT ID# Level 8' => ${'at8_tid'.$asstt['tid']},
+                        'ATT ID# Level 7' => ${'at7_tid'.$asstt['tid']},
+                        'ATT ID# Level 6' => ${'at6_tid'.$asstt['tid']},
+                        'ATT ID# Level 5' => ${'at5_tid'.$asstt['tid']},
+                        'ATT ID# Level 4' => ${'at4_tid'.$asstt['tid']},
+                        'ATT ID# Level 3' => ${'at3_tid'.$asstt['tid']},
+                        'ATT ID# Level 2' => ${'at2_tid'.$asstt['tid']},
+                        'ATT ID# Level 1' => ${'at1_tid'.$asstt['tid']}
+                    );
+                    $rows['tid' . $asstt['tid']] = $newRow;
+                }
+            }
+        }
+
+        for($ii = 1; $ii < 9; $ii++){
+            ${'at' . $ii . '_tid'} = '';
+            ${'at' . $ii . '_title'} = '';
+        }
+        $get_all_parents = array();
+        $get_ssall_parents = array();
+
+    }
+    return $rows;
+}
+
+function _prepare_fbo_report(){
+
+        $reportsTATR = variable_get('reports_fbo_ar', array());
+
+        // Clear anything Drupal has tried printing/rendering so far
+        @ob_end_clean();
+        while( @ob_end_clean() );
+
+        // Argument validation
+        if ( empty($_REQUEST['reqid']) ) {
+            exit('Missing reqid argument');
+        }
+        $reqid = $_REQUEST['reqid'];
+
+        // Check to see if another thread is working on this report already
+        if ( isset($reportsTATR[$reqid]) && $reportsTATR[$reqid] === 'working' ) {
+            exit('working');
+        }
+
+        // Check to see if another thread has already completed this report [of report-id reqid]
+        if ( isset($reportsTATR[$reqid]) && $reportsTATR[$reqid] === 'complete' ) {
+
+            // So this report must be completed now - but~ is the report saved on THIS server?
+            if ( !file_exists("sites/default/files/reports_fbo_ar_{$reqid}.csv") ) {
+
+                /* Nope, so tell the client its still in the works, it's next request will
+                probably hit a different server (the one where the report is saved) */
+                exit('working');
+
+            } else {
+
+                /* it is, so read this out to the client - JavaScript will take it from there (it
+                will simulate the download) */
+                readfile("sites/default/files/reports_fbo_ar_{$reqid}.csv");
+                exit();
+            }
+        }
+
+        /*  ==================================================
+            FROM THIS POINT ON WE ASSUME WE ARE THE FIRST CALL FOR THIS $reqid, FROM
+            HERE WE WILL BUILD THE ACTUAL REPORT.
+            ==================================================
+        */
+
+        /* Place a flag in the database, visible to all servers and PHP-threads that
+        this reqid is in the works */
+        $reportsTATR[$reqid] = 'working';
+        variable_set('reports_fbo_ar', $reportsTATR);
+
+        // foreach ( $topTerms as $topTerm ) {
+        $newrows= _userinput_report();
+
+        // Open the file for writing
+        $h = fopen("sites/default/files/reports_fbo_ar_{$reqid}.csv", 'w');
+        if ( $h === false ) {
+            exit('error');
+        }
+        // Write the CSV headers
+        fwrite($h, '"Date and Time Submitted","Keyword Filter","Location Filter", "Posted Date Filter", "Setaside Type Filter", "Show Non-Setaside Selector"');
+        fwrite($h, "\n");
+
+        foreach ( $newrows as $row ) {
+            foreach ( array_values($row) as $cellId => $cellValue) {
+                if ( $cellId != 0 ) {
+                    fwrite($h, ",");
+                }
+                fwrite($h, "\"".$cellValue."\"");
+            }
+            fwrite($h, "\n");
+        }
+        fclose($h);
+
+        /* Place a flag in the database, visible to all servers and PHP-threads that
+        this reqid is created and complete */
+        $reportsTATR[$reqid] = 'complete';
+        variable_set('reports_fbo_ar', $reportsTATR);
+
+        exit('working');
+}
+function _userinput_report(){
+    $elasticsearch_server = _govopp_elasticsearch_server();
+
+    $header = array(
+        "CONTENT-TYPE: application/json; charset=utf-8"
+    );
+
+
+    $datas = array();
+
+    for($i = 120; $i >= 10; $i-=10) {
+        $gt =strtotime("-".$i." day");
+        $lt = strtotime("-".($i-10)." day");
+        $param = '{
+    "query": {"range": {"submitteddate": {"gt": "'.$gt.'", "lt": "'.$lt.'"}}}}';
+
+
+        $curl = curl_init();
+        curl_setopt($curl, CURLOPT_URL, $elasticsearch_server . "/opportunityuserinputs/_search?size=10000&pretty");
+        curl_setopt($curl, CURLOPT_HTTPHEADER, $header);
+        curl_setopt($curl, CURLOPT_RETURNTRANSFER, 1);
+        curl_setopt($curl, CURLOPT_POSTFIELDS, $param);
+
+        $res = curl_exec($curl);
+        curl_close($curl);
+        $r = json_decode($res);
+
+        if (isset($r->hits->hits)) {
+            foreach ($r->hits->hits as $o) {
+                $data = array('Date and Time Submitted' => date('m/d/y H:s', $o->_source->submitteddate),
+                    'Keyword Filter' => $o->_source->keyword,
+                    'Location Filter' => $o->_source->location,
+                    'Posted Date Filter' => ($o->_source->postdate != null) ? date('m/d/y', strtotime($o->_source->postdate)) : '',
+                    'Setaside Type Filter' => $o->_source->setaside,
+                    'Show Non-Setaside Selector' => ($o->_source->show_na_setaside) ? 'TRUE' : 'FALSE');
+                $datas[date('m/d/y H:s', $o->_source->submitteddate).$o->_source->keyword.$o->_source->location.$o->_source->setaside.$o->_source->show_na_setaside.$o->_source->postdate] = $data;
+            }
+        }
+    }
+    //dsm($datas);
+    return $datas;
+}
+
+function _prepare_att_report() {
+
+    $reportsTATR = variable_get('reports_ar', array());
+
+    // Clear anything Drupal has tried printing/rendering so far
+    @ob_end_clean();
+    while( @ob_end_clean() );
+
+    // Argument validation
+    if ( empty($_REQUEST['reqid']) ) {
+        exit('Missing reqid argument');
+    }
+    $reqid = $_REQUEST['reqid'];
+
+    // Check to see if another thread is working on this report already
+    if ( isset($reportsTATR[$reqid]) && $reportsTATR[$reqid] === 'working' ) {
+        exit('working');
+    }
+
+    // Check to see if another thread has already completed this report [of report-id reqid]
+    if ( isset($reportsTATR[$reqid]) && $reportsTATR[$reqid] === 'complete' ) {
+
+        // So this report must be completed now - but~ is the report saved on THIS server?
+        if ( !file_exists("sites/default/files/report_ar_{$reqid}.csv") ) {
+
+            /* Nope, so tell the client its still in the works, it's next request will
+            probably hit a different server (the one where the report is saved) */
+            exit('working');
+
+        } else {
+
+            /* it is, so read this out to the client - JavaScript will take it from there (it
+            will simulate the download) */
+            readfile("sites/default/files/report_ar_{$reqid}.csv");
+            exit();
+        }
+    }
+
+    /*  ==================================================
+        FROM THIS POINT ON WE ASSUME WE ARE THE FIRST CALL FOR THIS $reqid, FROM
+        HERE WE WILL BUILD THE ACTUAL REPORT.
+        ==================================================
+    */
+
+    /* Place a flag in the database, visible to all servers and PHP-threads that
+    this reqid is in the works */
+    $reportsTATR[$reqid] = 'working';
+    variable_set('reports_ar', $reportsTATR);
+
+   // foreach ( $topTerms as $topTerm ) {
+    $rows= _compileAssetTopicTaxonomyReportToCSV();
+
+	// tracetofile(__FILE__,__LINE__,"filename sites/default/files/report_ar_{$reqid}.csv");
+	// Open the file for writing
+    $h = fopen("sites/default/files/report_ar_{$reqid}.csv", 'w');
+    if ( $h === false ) {
+        // tracetofile(__FILE__,__LINE__,"error opening sites/default/files/report_ar_{$reqid}.csv");
+        exit('error');
+    }
+    // Write the CSV headers
+    fwrite($h, '"counter","Asset Node ID number","Title","CMP Edit Link","For Use By","Owner","Status","Date Last Reviewed", "Language", "Type of Asset", "# of pages found", "Assigned to taxonomy", "Created Date", "Most Recent Published Date", "Soft Deleted Date"');
+    fwrite($h, "\n");
+
+    // Write the CSV content
+    $newrows = array();
+    $counter =0 ;
+    foreach($rows as $row){
+        $counter++;
+        $row['counter'] =$counter;
+        $newrows[] =$row;
+    }
+
+    foreach ( $newrows as $row ) {
+        foreach ( array_values($row) as $cellId => $cellValue) {
+            if ( $cellId != 0 ) {
+                fwrite($h, ",");
+            }
+            fwrite($h, "\"".$cellValue."\"");
+        }
+        fwrite($h, "\n");
+    }
+    fclose($h);
+
+    /* Place a flag in the database, visible to all servers and PHP-threads that
+    this reqid is created and complete */
+    $reportsTATR[$reqid] = 'complete';
+    variable_set('reports_ar', $reportsTATR);
+    // tracetofile(__FILE__,__LINE__,"report done working...");
+    // JKH commented, exit point from this report
+    exit('working');
+}
+
+function _get_uby_lbl_name($val) {
+
+    if ($val == 'GobiernoUSA.gov'){
+        $rval = 'USAGov en Espanol';
+    }
+    elseif ($val == 'USA.gov'){
+        $rval = 'USAGov English';
+    }
+    else{
+        $rval = $val;
+    }
+
+    return $rval;
+}
+
+function _compileAssetTopicTaxonomyReportToCSV() {
+    $counter =1;
+    // tracetofile(__FILE__,__LINE__,"_compileAssetTopicTaxonomyReportToCSV()");
+    // Get the nodes associated with this Topic
+    $nodes = db_query("SELECT nid FROM {node} WHERE type IN ('file_content_type', 'html_content_type', 'multimedia_content_type', 'text_content_type')");
+
+    foreach ($nodes as $n ) {
+        $node = node_load($n->nid);
+        // Get the 'For Use By' text for this node
+        $forUseBy = array();
+        if ($node->type == 'text_content_type') {
+            foreach ($node->field_for_use_by_text['und'] as $valCont) {
+                $forUseBy[] = _get_uby_lbl_name($valCont['value']);
+            }
+        }
+        if ($node->type == 'multimedia_content_type' || $node->type == 'html_content_type' || $node->type == 'file_content_type') {
+            // tracetofile(__FILE__,__LINE__,"node type match for node " . $node->nid);
+			if(!isset($node->field_for_use_by['und'])) {
+			    // node (186546) field_for_use_by[und] not set site_structure_report.module ln[691]
+				// tracetofile(__FILE__,__LINE__,"node (" . $node->nid . ") field_for_use_by[und] not set");
+				continue;
+			}
+			foreach ($node->field_for_use_by['und'] as $valCont) {
+				$forUseBy[] = _get_uby_lbl_name($valCont['value']);
+			}
+        }
+        $forUseBy = implode(', ', $forUseBy);
+
+        $last_reviewed = get_node_lastReviewedDate(array($node->nid));
+       // $first_published = db_query("SELECT MIN(stamp) FROM workbench_moderation_node_history WHERE nid = ".$node->nid . " AND from_state='scheduled_for_publication' AND state = 'published'")->fetchField(0);
+        $last_published = db_query("SELECT MAX(stamp) FROM workbench_moderation_node_history WHERE nid = ".$node->nid . " AND state = 'published'")->fetchField(0);
+        $node_deleted = db_query("SELECT deletion_timestamp FROM node_deleted WHERE deletion_state = 'soft' AND nid = ".$node->nid )->fetchField(0);
+
+        $sstids = count_findSiteStructTermsThatReferenceAsset($node->nid);
+        // Prepare to add new row to the report - for this node under this Asset Topic
+
+        $counter++;
+        $newRow = array(
+            'counter' => $counter,
+            'Asset Node ID number'=>$node->nid,
+            'Title' => tssr_sanitzie($node->title),
+            'CMP Edit Link' => "https://".$_SERVER['HTTP_HOST']."/node/{$node->nid}/edit",
+            'For Use By' => tssr_sanitzie($forUseBy),
+            'Owner' => !empty($node->field_owner['und'][0]['target_id'])? tssr_sanitzie((tssr_get_username($node->field_owner['und'][0]['target_id']))) : 'NOT SET IN CMP',
+            'Status' => _node_actual_status($node->nid, $node->status),
+            'Date Last Reviewed'=>  (isset($last_reviewed))? tssr_sanitzie(date("F d, Y",$last_reviewed)):'NOT SET IN CMP',
+            'Language'=> isset($node->field_language['und'][0]['value'])? tssr_sanitzie($node->field_language['und'][0]['value']) : 'NOT SET IN CMP',
+            'Type of Asset'=> tssr_sanitzie(node_type_get_name($node)),
+            '# of pages found'=> count($sstids),
+            'Assigned to taxonomy'=>(isset($node->field_asset_topic_taxonomy['und'][0]['tid']) && is_numeric($node->field_asset_topic_taxonomy['und'][0]['tid']))? "Yes":"No",
+            'Created Date'=>date("F d, Y",$node->created),
+            //'Published Date from Ready from publication'=> (isset($first_published))? date("F d, Y", $first_published):'NOT SET IN CMP',
+            'Most Recent Published Date'=>(isset($last_published))? date("F d, Y", $last_published):'NOT SET IN CMP',
+            'Soft Deleted Date'=>(isset($node_deleted) && !empty($node_deleted))? date("F d, Y", $node_deleted):'NOT SET IN CMP',
+        );
+
+        // Add new row to the report - for this node under this Asset Topic
+        $rows[$node->nid] = $newRow;
+
+    }
+    // tracetofile(__FILE__,__LINE__,"_compileAssetTopicTaxonomyReportToCSV() returning rows");
+    // traceobjects($rows);
+    return $rows;
+}
+
+function count_findSiteStructTermsThatReferenceAsset($assetNid) {
+
+    $ret = array();
+
+    // Tables to search
+    $tables = array(
+        "field_data_field_asset_order_carousel",
+        "field_data_field_asset_order_content",
+        "field_data_field_asset_order_sidebar",
+        "field_data_field_asset_order_bottom",
+        "field_data_field_home_howdoi_assets",
+        "field_data_field_home_alert_asset",
+        "field_data_field_home_whats_new_asset"
+    );
+
+    // Search the assets tables (on the S.S.-tax-terms)
+    foreach ( $tables as $table ) {
+        if (db_table_exists($table)) {
+            $valueColumn = str_replace('field_data_', '', $table);
+            $results = db_query("SELECT entity_id FROM {$table} WHERE {$valueColumn}_target_id={$assetNid}");
+            foreach ($results as $result) {
+                $tid = $result->entity_id;
+                $ret[$tid] = $tid;
+            }
+        }
+    }
+
+    return $ret;
+}
+
+function _node_actual_status($nid, $curr_status=-1){
+
+    if ($curr_status == -1){
+        $node = node_load($nid);
+        $curr_status = $node->status;
+    }
+
+    $res = db_query('SELECT deletion_state FROM node_deleted WHERE nid ='.$nid)->fetchField(0);
+    if ($res=='soft') {
+        $status = 'Soft Deleted';
+    }
+    elseif($res=='requested') {
+        $status = 'Soft Delete Requested';
+    }
+    elseif(empty($res) && $curr_status==0){
+        $status = 'Draft';
+    }
+    elseif(empty($res) && $curr_status==1) {
+        $status = 'Published';
+    }
+    return $status;
+}
+
+function _gen_report(){
+    // Crete data array
+
+    $site_structure_array[0]=array('Site', 'Page Title', 'Friendly URL', ' USA.gov Toggle URL', 'GobiernoUSA.gov Toggle URL', 'Kids.gov Toggle URL');
+
+    $get_root_level_site_name = taxonomy_get_tree(42,0,1);
+    foreach($get_root_level_site_name as $root_level){
+        $site_names[$root_level->tid]=$root_level->name;
+    }
+
+    foreach($site_names as $root_tid=>$site_name)
+    {
+        $get_all_terms=taxonomy_get_tree(42,$root_tid);
+
+        foreach($get_all_terms as $get_term) {
+            $site_structure_array[]=get_onetime_child_info_report($get_term->tid,$get_term->depth,$site_name);
+
+        }
+    }
+
+    export_to_csv($site_structure_array);
+}
+
+function get_onetime_child_info_report($tid, $pos,$site_name){
+    global $base_url;
+
+
+    $get_all_parents=taxonomy_get_parents_all($tid);
+    $last_changed_date='-';
+
+    $i=0; $j=0;
+    foreach($get_all_parents as $lvl=>$par_info){
+
+        if($par_info->tid!=$tid)
+        {
+            $page_type_info=$par_info->field_type_of_page_to_generate['und'][0]['value'];
+            if($page_type_info=='more' && $site_name!='Kids.USA.gov'){
+
+            }
+
+            else{
+                $par_title=$par_info->field_page_title['und'][0]['value'];
+                $levels[$i]=$par_title;
+                $i++;
+            }
+
+            $get_all_par[$j]=$par_info->field_page_title['und'][0]['value'];
+            $j++;
+
+        }
+        else{
+            $get_term=$par_info;
+        }
+
+    }
+    $site_name=$levels[count($levels)-1];
+
+    $site_structure_array[0]=tssr_sanitzie($site_name) ;
+
+    // page title
+    if($get_term->field_page_title){
+        $page_title=$get_term->field_page_title['und'][0]['value'];
+    }
+    else{
+        $page_title=$get_term->name;
+    }
+    $site_structure_array[1]=tssr_sanitzie($page_title);
+
+    // Friendly URL
+    if($get_term->field_friendly_url){
+        $site_structure_array[2]=$get_term->field_friendly_url['und'][0]['value'];
+    }
+    else{
+        $site_structure_array[2]='NOT SET IN CMP';
+    }
+
+    // usa toggle url
+    if($get_term->field_usa_gov_toggle_url){
+        $site_structure_array[3]=$get_term->field_usa_gov_toggle_url['und'][0]['value'];
+    }
+    else{
+        $site_structure_array[3]='NOT SET IN CMP';
+    }
+
+    // gobierno toggle url
+    if($get_term->field_gobiernousa_gov_toggle_url){
+        $site_structure_array[4]=$get_term->field_gobiernousa_gov_toggle_url['und'][0]['value'];
+    }
+    else{
+        $site_structure_array[4]='NOT SET IN CMP';
+    }
+
+    // kids toggle url
+    if($get_term->field_kids_gov_toggle_url){
+        $site_structure_array[5]=$get_term->field_kids_gov_toggle_url['und'][0]['value'];
+    }
+    else{
+        $site_structure_array[5]='NOT SET IN CMP';
+    }
+
+    return $site_structure_array;
+}
+
+function _prepare_report()
+{
+
+    // Create data array
+    unset($site_structure_array);
+    // JKH more formal list, commented 'USAGov Topic Crosswalk', 16 out
+    $site_structure_array[0]=array(
+    	'Site',						// 0
+    	'Owner',					// 1			
+    	'Hierarchy Level',			// 2
+    	'Page Type',				// 3
+    	'Topic Desk Replacement',	// 4
+    	'Friendly URL',				// 5
+    	'CMP Edit Link',			// 6
+    	'Page ID',					// 7
+    	'Page Title',				// 8
+        'Parent Title',				// 9
+        'Level 6',					// 10
+        'Level 5',					// 11 
+        'Level 4',					// 12 
+        'Level 3',					// 13
+        'Level 2',					// 14 
+        'Level 1',					// 15 
+        // 'USAGov Topic Crosswalk',	// 16 
+        'GA style URL',				// 17 
+        'VOC tool export URL style',// 18
+        'Last Changed Date',		// 19 
+        'Assets on Page',			// 20 
+        'Toggle URL');				// 21
+
+    $get_root_level_site_name = taxonomy_get_tree(42,0,1);
+    foreach($get_root_level_site_name as $root_level){
+        $site_names[$root_level->tid]=$root_level->name;
+    }
+
+    foreach($site_names as $root_tid=>$site_name)
+    {
+        $get_all_terms=taxonomy_get_tree(42,$root_tid);
+
+        foreach($get_all_terms as $get_term) {
+            $site_structure_array[]=get_child_info($get_term->tid,$get_term->depth,$site_name);
+        }
+    }
+
+    export_to_csv($site_structure_array);
+}
+
+function export_to_csv(array &$array)
+{
+    if (count($array) == 0) {
+        return null;
+    }
+    @ob_end_clean();
+    while( @ob_end_clean() );
+
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename=SSdata.csv');
+    @ob_start();
+    $csv_file = fopen("php://output", 'w');
+
+    foreach ($array as $row) {
+        if (!empty($row)) {
+            fputcsv($csv_file,$row);
+        }
+    }
+    fclose($csv_file);
+    // JKH why is die called here?
+    die;
+}
+
+function get_child_info($tid, $pos,$site_name){
+
+    global $base_url;
+
+    $get_all_parents=taxonomy_get_parents_all($tid);
+    $last_changed_date='-';
+
+    $i=0; $j=0;
+    foreach($get_all_parents as $lvl=>$par_info){
+
+        if($par_info->tid!=$tid)
+        {
+            $page_type_info=$par_info->field_type_of_page_to_generate['und'][0]['value'];
+            if($page_type_info=='more' && $site_name!='Kids.USA.gov'){
+
+            }
+            else{
+                $par_title=$par_info->field_page_title['und'][0]['value'];
+                $levels[$i]=$par_title;
+                $i++;
+            }
+
+            $get_all_par[$j]=$par_info->field_page_title['und'][0]['value'];
+            $j++;
+
+        }
+        else{
+            $get_term=$par_info;
+        }
+
+    }
+
+    $site_name=$levels[count($levels)-1];
+
+    $site_structure_array[0]=tssr_sanitzie(_get_uby_lbl_name($site_name)) ;
+
+    /*if($get_term->changed){
+        $last_changed_date =  gmdate("m-d-Y", $get_term->changed);
+    }*/
+    if ($page_type_info = "generic-content-page"){
+        $dt = get_term_lastReviewedDate($tid);
+        if (!empty($dt)) {
+            $last_changed_date = gmdate("m-d-Y", $dt);
+        }
+        else{
+            $last_changed_date = "N/A. Page is NOT content page";
+        }
+    }
+    else {
+        $last_changed_date = "N/A. Page is NOT content page";
+    }
+
+    if($get_term->field_term_owner){
+        $owner_target_id=$get_term->field_term_owner['und'][0]['target_id'];
+        $user_name = db_query("SELECT name FROM {users} WHERE uid = :user_id",array(":user_id"=>$owner_target_id))->fetchAssoc();
+        $username = $user_name['name'];
+        $site_structure_array[1]=$username;
+    }
+    else {
+        $site_structure_array[1]='NOT SET IN CMP';
+    }
+    //$position = count((array)$get_all_parents);
+    $site_structure_array[2]=$pos+1;
+
+    if($get_term->field_type_of_page_to_generate){
+        $page_type = $get_term->field_type_of_page_to_generate['und'][0]['value'];
+    }
+    else {
+        $page_type ='NOT SET IN CMP';
+    }
+    $site_structure_array[3]=tssr_sanitzie($page_type);
+
+    $help_desk = 'NOT SET IN CMP';
+    if (isset($get_term->field_help_desk['und'][0]['tid'])) {
+        $help_term = taxonomy_term_load($get_term->field_help_desk['und'][0]['tid']);
+        $help_desk = (!empty($help_term))? $help_term->name : '';
+    }
+    $site_structure_array[4]=tssr_sanitzie($help_desk);
+
+    if($get_term->field_friendly_url){
+        $friendly_url = $get_term->field_friendly_url['und'][0]['value'];
+    }
+    else {
+        $friendly_url='NOT SET IN CMP';
+    }
+    $site_structure_array[5]=tssr_sanitzie($friendly_url);
+
+    $cmp_edit_link=$base_url.'/taxonomy/term/'.$get_term->tid.'/edit';
+    $site_structure_array[6]=tssr_sanitzie($cmp_edit_link);
+
+    $site_structure_array[7]=$get_term->tid;
+
+    if($get_term->field_page_title){
+        $page_title=$get_term->field_page_title['und'][0]['value'];
+    }
+    else{
+        $page_title=$get_term->name;
+    }
+    $site_structure_array[8]=tssr_sanitzie($page_title);
+
+    $site_structure_array[9]=tssr_sanitzie(_get_uby_lbl_name($get_all_par[0]));
+    $rev_levels = array_reverse($levels);
+
+    $filled_up_levels=count($rev_levels);
+    if($filled_up_levels<6){
+        for($i=6; $i>$filled_up_levels; $i--)
+        {
+            $rev_levels[$i] = $page_title;
+        }
+    }
+
+	$col = 10;
+    krsort($rev_levels);
+    foreach($rev_levels as $level){
+        $site_structure_array[$col++]=tssr_sanitzie(_get_uby_lbl_name($level));
+    }
+
+	// JKH 
+	// this should be 16 now after Level 6 ... 1, and 
+	// 'USAGov Topic Crosswalk',	// 16 is not used any longer...
+    // $site_structure_array[$col++]='';
+    $ga_style_url='';
+    $voc_tool_export_url='';
+    if($friendly_url!='NOT SET IN CMP'){
+        if($site_name=='USA.gov'){
+            $ga_style_url='usa.gov'.$friendly_url;
+            $voc_tool_export_url = 'https://www.usa.gov'.$friendly_url;
+        }
+        if($site_name=='GobiernoUSA.gov'){
+            $ga_style_url='usa.gov'.$friendly_url;
+            $voc_tool_export_url = 'https://www.usa.gov'.$friendly_url;
+        }
+        if($site_name=='Kids.gov'){
+            $ga_style_url='kids.usa.gov'.$friendly_url;
+            $voc_tool_export_url = 'https://kids.usa.gov'.$friendly_url;
+        }
+        if($site_name=='Blog.USA.Gov'){
+            $ga_style_url='blog.usa.gov'.$friendly_url;
+            $voc_tool_export_url = 'https://blog.usa.gov'.$friendly_url;
+        }
+    }
+
+    $site_structure_array[$col++]=tssr_sanitzie($ga_style_url);
+    $site_structure_array[$col++]=tssr_sanitzie($voc_tool_export_url);
+
+    $site_structure_array[$col++]=tssr_sanitzie($last_changed_date);
+    $site_structure_array[$col++]=count(tssr_getAssetsInSiteStructTerm($get_term));
+    // put the toggle url
+    $site_structure_array[$col++]= (isset($get_term->field_usa_gov_toggle_url['und'][0]['value']) && strlen($get_term->field_usa_gov_toggle_url['und'][0]['value'])>0)? 'https://www.usa.gov'.$get_term->field_usa_gov_toggle_url['und'][0]['value']:
+        ((isset($get_term->field_gobiernousa_gov_toggle_url['und'][0]['value']) && strlen($get_term->field_gobiernousa_gov_toggle_url['und'][0]['value'])>0)? 'https://www.usa.gov'.$get_term->field_gobiernousa_gov_toggle_url['und'][0]['value']:'');
+    
+    // JKH added for debug
+    // global $itemCount;
+    // tracetofile(__FILE__,__LINE__,"**** Array " . ++$itemCount . " ****");
+    // traceobjects($site_structure_array);
+    // tracetofile(__FILE__,__LINE__,"**** End   ****");
+    
+    return $site_structure_array;
+}
